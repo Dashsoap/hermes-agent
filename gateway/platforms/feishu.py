@@ -2574,6 +2574,18 @@ class FeishuAdapter(BasePlatformAdapter):
         future.add_done_callback(self._log_background_failure)
         return True
 
+    def _is_paired_user(self, open_id: str) -> bool:
+        """Return whether a Feishu open_id is approved via DM pairing."""
+        normalized = str(open_id or "").strip()
+        if not normalized:
+            return False
+        try:
+            from gateway.pairing import PairingStore
+            return PairingStore().is_approved("feishu", normalized)
+        except Exception:
+            logger.debug("[Feishu] Failed to consult pairing store for card action", exc_info=True)
+            return False
+
     def _is_interactive_operator_authorized(self, open_id: str) -> bool:
         """Return whether this card-action operator may answer gated prompts."""
         normalized = str(open_id or "").strip()
@@ -2582,7 +2594,7 @@ class FeishuAdapter(BasePlatformAdapter):
         allowed_ids = set(self._admins) | set(self._allowed_group_users)
         if not allowed_ids:
             return True
-        return "*" in allowed_ids or normalized in allowed_ids
+        return "*" in allowed_ids or normalized in allowed_ids or self._is_paired_user(normalized)
 
     def _handle_approval_card_action(self, *, event: Any, action_value: Dict[str, Any], loop: Any) -> Any:
         """Schedule approval resolution and build the synchronous callback response."""
@@ -4148,6 +4160,8 @@ class FeishuAdapter(BasePlatformAdapter):
         sender_ids = {sender_open_id, sender_user_id} - {None}
 
         if sender_ids and self._admins and (sender_ids & self._admins):
+            return True
+        if sender_open_id and self._is_paired_user(str(sender_open_id)):
             return True
 
         rule = self._group_rules.get(chat_id) if chat_id else None

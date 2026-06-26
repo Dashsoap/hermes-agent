@@ -74,7 +74,7 @@ def _make_card_action_data(
     )
 
 
-def _close_submitted_coro(coro, _loop):
+def _close_submitted_coro(_loop, coro):
     """Close scheduled coroutines in sync-handler tests to avoid unawaited warnings."""
     coro.close()
     return SimpleNamespace(add_done_callback=lambda *_args, **_kwargs: None)
@@ -391,6 +391,40 @@ class TestResolveApproval:
 
         mock_resolve.assert_not_called()
         assert 5 in adapter._approval_state
+
+    def test_pairing_approved_click_schedules_when_allowlist_present(self):
+        adapter = _make_adapter()
+        adapter._loop = MagicMock()
+        adapter._allowed_group_users = {"ou_someone_else"}
+        adapter._approval_state[7] = {
+            "session_key": "sess-7",
+            "message_id": "msg_007",
+            "chat_id": "oc_12345",
+        }
+        data = _make_card_action_data(
+            action_value={
+                "hermes_action": "approve_once",
+                "approval_id": 7,
+            },
+            chat_id="oc_12345",
+            open_id="ou_paired",
+        )
+
+        fake_store = MagicMock()
+        fake_store.is_approved.return_value = True
+        with patch("gateway.pairing.PairingStore", return_value=fake_store), patch.object(
+            adapter, "_loop_accepts_callbacks", return_value=True,
+        ), patch.object(
+            adapter, "_submit_on_loop", side_effect=_close_submitted_coro,
+        ) as mock_submit:
+            adapter._handle_approval_card_action(
+                event=data.event,
+                action_value=data.event.action.value,
+                loop=adapter._loop,
+            )
+
+        fake_store.is_approved.assert_called_once_with("feishu", "ou_paired")
+        mock_submit.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_chat_mismatch_does_not_resolve(self):
